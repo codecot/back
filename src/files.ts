@@ -1,11 +1,13 @@
-import Router from '@koa/router';
-import fs from 'fs-extra';
-import { cwd } from 'node:process';
-import { PassThrough } from 'stream';
+import Router from "@koa/router";
+import fs from "fs-extra";
+import path from "path";
+import { cwd } from "node:process";
+// import { PassThrough } from 'stream';
 
 const router: Router = new Router();
 
-const workingDirectory: string = cwd();
+// const workingDirectory: string = cwd();
+const workingDirectory: string = path.join(cwd(), '../ui/src');
 
 export const enum FILETYPE {
   FILE = 'file',
@@ -13,7 +15,7 @@ export const enum FILETYPE {
   SYMLINK = 'symlink',
   OTHER = 'other',
 }
-∏
+
 async function detectType(path: string): Promise<FILETYPE> {
   const stat = await fs.lstat(path);
   if (stat.isFile()) {
@@ -28,27 +30,100 @@ async function detectType(path: string): Promise<FILETYPE> {
   return FILETYPE.OTHER;
 }
 
-async function* walkDir(dir: string): AsyncGenerator<string> {
-  const files = await fs.readdir(dir);
-  for (const file of files) {
-    const path = `${dir}/${file}`;
-    const stat = await fs.lstat(path);
-    if (stat.isDirectory()) {
-      yield* walkDir(path);
-    } else {
-      yield path;
-    }
-  }
+// async function* walkDirAsync(dir: string): AsyncGenerator<string> {
+//   const files = await fs.readdir(dir);
+//   for (const file of files) {
+//     const path = `${dir}/${file}`;
+//     const stat = await fs.lstat(path);
+//     if (stat.isDirectory()) {
+//       yield* walkDir(path);
+//     } else {
+//       yield path;
+//     }
+//   }
+// }
+
+export type FileTree = {
+  name: string;
+  path: string;
+  type: FILETYPE;
+  children?: Array<FileTree>;
+  size?: string;
+  atime?: Date;
+  mtime?: Date;
+  ctime?: Date;
+};
+
+function truncateFilePath(filePath: string, dirPath: string): string {
+  const relativePath = path.relative(dirPath, filePath);
+  const segments = relativePath.split(path.sep);
+  const truncatedSegments = segments.slice(Math.max(segments.length - 2, 0));
+  const truncatedPath = truncatedSegments.join(path.sep);
+  return truncatedPath.length > 0 ? truncatedPath : '.';
 }
 
-router.get('/', async (ctx) => {
-  ctx.type = 'text/html';
-  ctx.body = fs.createReadStream(`${workingDirectory}/index.html`);
+function formatFileSize(sizeInBytes: number, decimalPlaces = 2): string {
+  const units = ['bytes', 'KB', 'MB', 'GB'];
+  let size = sizeInBytes;
+  let unitIndex = 0;
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+
+  const formattedSize = size.toFixed(decimalPlaces);
+  const unit = units[unitIndex];
+
+  return `${formattedSize} ${unit}`;
+}
+
+async function dirTree(filename: string, dirPath: string): Promise<FileTree> {
+  const filetype = await detectType(filename);
+  const stat = await fs.stat(filename);
+  console.log(stat);
+  const info: FileTree = {
+    name: path.basename(filename),
+    path: truncateFilePath(filename, dirPath),
+    type: filetype,
+    atime: stat.atime,
+    mtime: stat.mtime,
+    ctime: stat.ctime,
+    size: formatFileSize(stat.size, 2),
+    // children: [],
+  };
+  if (filetype === FILETYPE.DIRECTORY) {
+    info.children = await Promise.all(
+      (
+        await fs.readdir(filename)
+      ).map(function (child) {
+        return dirTree(path.join(filename, child), dirPath);
+      })
+    );
+  }
+
+  return info;
+}
+
+router.get('/', async (ctx, next) => {
+  ctx.type = 'text/json';
+  const files = await dirTree(
+    path.join(workingDirectory, '.'),
+    workingDirectory
+  );
+  ctx.body = JSON.stringify(files);
+  // ctx.body = fs.createReadStream(`${workingDirectory}/index.html`);
+  await next();
 });
 
 router.get('/:filePath', async (ctx, next) => {
-  ctx.type = 'text/html';
-  ctx.body = fs.createReadStream(`${workingDirectory}/${ctx.params.filePath}`);
+  ctx.type = 'text/json';
+  const files = await dirTree(
+    path.join(workingDirectory, ctx.params.filePath),
+    workingDirectory
+  );
+  ctx.body = JSON.stringify(files);
+  await next();
 });
 
 // router.get('/:filePath', async (ctx, next) => {
@@ -60,28 +135,36 @@ router.get('/:filePath', async (ctx, next) => {
 // )
 //   ;
 
-function* streamFileGenerator(filePath: string) {
-  const stream = fs.createReadStream(filePath);
-  const passThrough = new PassThrough();
-  stream.pipe(passThrough);
-  yield passThrough;
-}
+// function* streamFileGenerator(filePath: string) {
+//   const stream = fs.createReadStream(filePath);
+//   const passThrough = new PassThrough();
+//   stream.pipe(passThrough);
+//   yield passThrough;
+// }
 
-router.get('/a/:filePath', async (ctx, next) => {
-  const filePath = `${workingDirectory}/${ctx.params.filePath}`;
-  const fileGenerator = streamFileGenerator(filePath);
+router.get('/get/:filePath', async (ctx, next) => {
+  const filePath = path.join(workingDirectory, ctx.params.filePath);
+  try {
+    ctx.body = await fs.readFile(filePath, 'utf8');
+    await next();
+  } catch (err) {
+    console.error(err);
+    ctx.status = 500;
+    ctx.body = 'Error reading file';
+  }
 
-  ctx.response.set(
-    'Content-Disposition',
-    `attachment; filename=${ctx.params.filePath}`
-  );
-  ctx.response.type = 'application/octet-stream';
-  ctx.body = fileGenerator.next().value;
-
-  ctx.req.on('close', () => {
-    fileGenerator.return();
-    // cleanup any resources if necessary
-  });
+  // const fileGenerator = streamFileGenerator(filePath);
+  // ctx.response.set(
+  //   'Content-Disposition',
+  //   `attachment; filename=${ctx.params.filePath}`
+  // );
+  // ctx.response.type = 'application/octet-stream';
+  // ctx.body = fileGenerator.next().value;
+  //
+  // ctx.req.on('close', () => {
+  //   fileGenerator.return();
+  //   // cleanup any resources if necessary
+  // });
 });
 
 // router.post('/', async (ctx) => {
