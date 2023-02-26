@@ -44,6 +44,7 @@ async function detectType(path: string): Promise<FILETYPE> {
 // }
 
 export type FileTree = {
+  id: string;
   name: string;
   path: string;
   type: FILETYPE;
@@ -81,8 +82,8 @@ function formatFileSize(sizeInBytes: number, decimalPlaces = 2): string {
 async function dirTree(filename: string, dirPath: string): Promise<FileTree> {
   const filetype = await detectType(filename);
   const stat = await fs.stat(filename);
-  console.log(stat);
   const info: FileTree = {
+    id: `${stat.ino}`,
     name: path.basename(filename),
     path: truncateFilePath(filename, dirPath),
     type: filetype,

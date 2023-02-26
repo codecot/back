@@ -4,12 +4,14 @@ import json from 'koa-json';
 import logger from 'koa-logger';
 import mount from 'koa-mount';
 import serve from 'koa-static';
+import cors from '@koa/cors';
 
 import router from './router';
 
 const app = new Koa();
 
 // Middlewares
+app.use(cors());
 app.use(logger());
 app.use(bodyParser());
 app.use(json());
